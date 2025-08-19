@@ -116,7 +116,7 @@ if submitted:
     else:
         # --- MODIFIKASI: Buat query yang lebih presisi ---
         negative_keywords = generate_negative_keywords(product_name)
-        base_query = f'harga "{product_name}" (bekas|second|seken) (site:tokopedia.com OR site:shopee.co.id)'
+        base_query = f'harga "{product_name}" (bekas|second|seken) (site:tokopedia.com OR site:shopee.co.id) -baru -kredit'
         query = f"{base_query} {negative_keywords}"
         
         with st.spinner(f"Mencari harga untuk '{product_name}'..."):
