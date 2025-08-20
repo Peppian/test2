@@ -2,16 +2,15 @@ import streamlit as st
 import requests
 import re
 import statistics
+import numpy as np
 
-# --- FUNGSI-FUNGSI UTAMA (Termasuk yang baru) ---
+# --- FUNGSI-FUNGSI UTAMA ---
 
 def extract_price(text):
     """Mengekstrak harga dari teks dengan regex yang lebih fleksibel."""
     pattern = r"(?:Rp\s?\.?)?(\d{1,3}(?:\.\d{3})+(?!\d)|\d{6,})"
     matches = re.findall(pattern, text)
-    
     if not matches: return None
-    
     for match in matches:
         cleaned_price = re.sub(r"[^\d]", "", match)
         if cleaned_price.isdigit():
@@ -20,41 +19,60 @@ def extract_price(text):
                 return price
     return None
 
-# --- TAMBAHAN: FUNGSI UNTUK FILTER LEBIH KETAT ---
+# --- PERUBAHAN: Fungsi filter dan analisis yang disempurnakan ---
 
-def generate_negative_keywords(product_name):
-    """Membuat kata kunci negatif untuk model lama secara dinamis."""
-    match = re.search(r'\b(\d+)\b', product_name)
-    if not match: return ""
-
-    current_model_num = int(match.group(1))
-    # Ambil basis nama produk sebelum angka. Cth: "Samsung Z Flip 5" -> "Samsung Z Flip"
-    product_base_name = product_name[:match.start()].strip() 
+def build_smartphone_query(product_name):
+    """Membangun query yang fleksibel dan kuat khusus untuk smartphone."""
+    # Definisikan kata kunci wajib untuk kondisi bekas
+    used_keywords = "(bekas|second|seken|2nd|preloved)"
+    # Definisikan kata kunci negatif yang kuat
+    negative_keywords = "-BNIB -segel -resmi -baru -official"
     
-    negative_keywords = []
-    # Buat keyword negatif untuk 3 model sebelumnya agar lebih presisi
-    for i in range(1, 4):
-        if current_model_num - i > 0:
-            negative_keywords.append(f'-"{product_base_name} {current_model_num - i}"')
-            
-    return " ".join(negative_keywords)
-
-def is_title_relevant(title, product_name):
-    """Memvalidasi apakah judul listing relevan dengan nama produk yang dicari."""
-    title_lower = title.lower()
-    # Pecah nama produk menjadi kata kunci esensial dan abaikan kata pendek
-    required_keywords = [word for word in product_name.lower().split() if len(word) > 1]
+    # Logika sederhana untuk memecah nama produk
+    parts = product_name.split()
+    brand = parts[0]
+    model_keywords = " ".join(parts[1:])
     
-    # Judul harus mengandung SEMUA kata kunci esensial
-    return all(keyword in title_lower for keyword in required_keywords)
+    # Gabungkan menjadi model inti dalam tanda kutip jika lebih dari satu kata
+    if len(parts) > 2:
+        # Cth: "iPhone 14 Pro", "Galaxy S23 Ultra"
+        model_part = f'"{model_keywords}"'
+    else:
+        # Cth: "13T" (jika brand sudah dipisah)
+        model_part = model_keywords
+        
+    # Template query final
+    query = f'harga {brand} {model_part} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords}'
+    return query
 
-# --- FUNGSI API & PROSES DATA (Dengan Modifikasi) ---
+def is_definitely_used(title, snippet):
+    """Fungsi validasi ketat untuk memastikan listing adalah barang bekas."""
+    text = f"{title} {snippet}".lower()
+    positive_signals = ['bekas', 'second', 'seken', '2nd', 'preloved']
+    if not any(word in text for word in positive_signals):
+        return False
+    strong_negative_signals = ['bnib', 'segel', 'brand new', 'garansi resmi', 'official store', 'baru']
+    if any(word in text for word in strong_negative_signals):
+        return False
+    return True
 
-def search_price_on_google(api_key, search_engine_id, query, pages=3):
-    """Mencari di beberapa halaman Google untuk mendapatkan lebih banyak data."""
+def remove_price_outliers(prices):
+    """Membersihkan daftar harga dari nilai ekstrem (outlier) menggunakan IQR."""
+    if len(prices) < 4:
+        return prices
+    q1 = np.percentile(prices, 25)
+    q3 = np.percentile(prices, 75)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    return [price for price in prices if lower_bound <= price <= upper_bound]
+
+# --- FUNGSI API & PROSES DATA ---
+
+def search_price_on_google(api_key, search_engine_id, query, pages=2): # Mengurangi halaman untuk pencarian lebih terfokus
+    """Mencari di beberapa halaman Google."""
     all_items = []
-    st.info(f"⚙️ Query yang dikirim ke Google: `{query}`") # Tampilkan query final
-    
+    st.info(f"⚙️ Query yang dikirim ke Google: `{query}`")
     for page in range(pages):
         start_index = page * 10 + 1
         params = {'key': api_key, 'cx': search_engine_id, 'q': query, 'num': 10, 'start': start_index}
@@ -69,82 +87,84 @@ def search_price_on_google(api_key, search_engine_id, query, pages=3):
             return []
     return all_items
 
-def process_search_results(items, product_name): # --- MODIFIKASI: Tambahkan product_name ---
+def process_search_results(items):
     """Memproses hasil pencarian mentah menjadi data harga yang bersih."""
     data_final = []
     processed_links = set()
-
     for item in items:
         link = item.get("link", "")
         title = item.get("title", "")
-
-        # --- MODIFIKASI: Terapkan filter relevansi judul di sini ---
-        if not is_title_relevant(title, product_name):
-            continue # Lewati item ini jika judulnya tidak relevan
+        snippet = item.get("snippet", "")
         
-        if link in processed_links or "youtube.com" in link or "/berita/" in link:
+        # --- PERUBAHAN: Gunakan filter is_definitely_used yang lebih ketat ---
+        if not is_definitely_used(title, snippet):
             continue
             
-        snippet = item.get("snippet", "")
-        combined_text = f"{title} {snippet}"
-        price = extract_price(combined_text)
-        
+        if link in processed_links:
+            continue
+            
+        price = extract_price(f"{title} {snippet}")
         if price:
             data_final.append({"judul": title, "harga": price, "link": link})
             processed_links.add(link)
-            
     return data_final
 
 # --- UI STREAMLIT ---
 
-st.set_page_config(page_title="Cek Harga Bekas", layout="wide")
-st.title("📊 Aplikasi Pengecek Rata-Rata Harga Barang Bekas")
-st.write("Masukkan nama barang yang spesifik (termasuk model dan varian) untuk hasil terbaik.")
+st.set_page_config(page_title="Cek Harga Smartphone Bekas", layout="wide")
+st.title("📱 Aplikasi Pengecek Harga Smartphone Bekas")
+st.write("Fokus pada Smartphone. Masukkan Merek, Model, dan Varian untuk hasil terbaik.")
 
 with st.form("search_form"):
     API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
     SEARCH_ENGINE_ID = st.secrets.get("GOOGLE_CX", "")
 
-    product_name = st.text_input("Nama Barang", "Samsung Z Flip 5 256GB")
-    submitted = st.form_submit_button("Cari Harga Rata-rata!")
+    product_name = st.text_input("Nama Smartphone", "Apple iPhone 14 Pro 256GB")
+    submitted = st.form_submit_button("Cek Harga Pasaran!")
 
 if submitted:
     if not API_KEY or not SEARCH_ENGINE_ID:
         st.error("Harap konfigurasikan `GOOGLE_API_KEY` dan `GOOGLE_CX` di Streamlit Secrets!")
     elif not product_name:
-        st.warning("Nama barang tidak boleh kosong.")
+        st.warning("Nama smartphone tidak boleh kosong.")
     else:
-        # --- MODIFIKASI: Buat query yang lebih presisi ---
-        negative_keywords = generate_negative_keywords(product_name)
-        base_query = f'harga "{product_name}" (bekas|second|seken) (site:tokopedia.com OR site:shopee.co.id) -baru -kredit'
-        query = f"{base_query} {negative_keywords}"
+        # --- PERUBAHAN: Gunakan fungsi baru untuk membangun query ---
+        query = build_smartphone_query(product_name)
         
         with st.spinner(f"Mencari harga untuk '{product_name}'..."):
             raw_items = search_price_on_google(API_KEY, SEARCH_ENGINE_ID, query, pages=3)
             
             if not raw_items:
-                st.warning("Tidak ada hasil yang ditemukan dari Google. Coba kata kunci yang lebih umum.")
+                st.warning("Tidak ada hasil yang ditemukan dari Google. Coba kata kunci yang lebih spesifik.")
             else:
-                st.write(f"Ditemukan {len(raw_items)} total hasil mentah. Memfilter dan memproses...")
+                st.write(f"Ditemukan {len(raw_items)} total hasil mentah. Menerapkan filter ketat...")
                 
-                final_data = process_search_results(raw_items, product_name) # Kirim product_name ke fungsi proses
+                final_data = process_search_results(raw_items)
                 
                 if not final_data:
-                    st.error("Tidak ada data harga yang valid ditemukan setelah difilter. Pastikan nama produk spesifik dan coba lagi.")
+                    st.error("Tidak ada data harga yang valid ditemukan setelah difilter. Coba lagi dengan nama produk lain.")
                 else:
-                    st.success(f"Berhasil mengekstrak harga dari **{len(final_data)}** listing yang sangat relevan!")
-                    
                     all_prices = [item['harga'] for item in final_data]
                     
-                    st.subheader("📊 Hasil Analisis Harga")
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Harga Rata-rata", f"Rp {int(statistics.mean(all_prices)):,}")
-                    col2.metric("Harga Tengah (Median)", f"Rp {int(statistics.median(all_prices)):,}")
-                    col3.metric("Harga Terendah", f"Rp {min(all_prices):,}")
-                    col4.metric("Harga Tertinggi", f"Rp {max(all_prices):,}")
-
-                    st.write("---")
-                    st.subheader("📋 Detail Listing yang Ditemukan")
+                    # --- PERUBAHAN: Bersihkan harga dari outlier sebelum dianalisis ---
+                    cleaned_prices = remove_price_outliers(all_prices)
                     
-                    display_data = [{"Harga": f"Rp {item['harga']:,}", "Judul Listing": item['judul'], "Link": item['link']} for item in sorted(final_data, key=lambda x: x['harga'])]
-                    st.dataframe(display_data, use_container_width=True)
+                    if not cleaned_prices:
+                         st.error("Data harga yang ditemukan terlalu bervariasi untuk dianalisis. Coba kata kunci yang lebih spesifik.")
+                    else:
+                        st.success(f"Berhasil menganalisis **{len(cleaned_prices)}** dari **{len(all_prices)}** listing yang relevan (setelah membersihkan outlier).")
+                        
+                        st.subheader("📊 Hasil Analisis Harga")
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Harga Rata-rata", f"Rp {int(statistics.mean(cleaned_prices)):,}")
+                        col2.metric("Harga Tengah (Median)", f"Rp {int(statistics.median(cleaned_prices)):,}")
+                        col3.metric("Harga Terendah", f"Rp {min(cleaned_prices):,}")
+                        col4.metric("Harga Tertinggi", f"Rp {max(cleaned_prices):,}")
+
+                        st.write("---")
+                        st.subheader("📋 Detail Listing yang Dianalisis")
+                        
+                        display_data = [{"Harga": f"Rp {item['harga']:,}", "Judul Listing": item['judul'], "Link": item['link']} 
+                                        for item in sorted(final_data, key=lambda x: x['harga']) 
+                                        if item['harga'] in cleaned_prices]
+                        st.dataframe(display_data, use_container_width=True)
