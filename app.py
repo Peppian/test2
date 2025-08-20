@@ -21,29 +21,15 @@ def extract_price(text):
 
 # --- PERUBAHAN: Fungsi filter dan analisis yang disempurnakan ---
 
-def build_smartphone_query(product_name):
-    """Membangun query yang fleksibel dan kuat khusus untuk smartphone."""
-    # Definisikan kata kunci wajib untuk kondisi bekas
+def build_smartphone_query(brand, model, spec):
+    """Membangun query dari 3 input terpisah untuk akurasi maksimal."""
     used_keywords = "(bekas|second|seken|2nd|preloved)"
-    # Definisikan kata kunci negatif yang kuat
     negative_keywords = "-BNIB -segel -resmi -baru -official"
     
-    # Logika sederhana untuk memecah nama produk
-    parts = product_name.split()
-    brand = parts[0]
-    model_keywords = " ".join(parts[1:])
-    
-    # Gabungkan menjadi model inti dalam tanda kutip jika lebih dari satu kata
-    if len(parts) > 2:
-        # Cth: "iPhone 14 Pro", "Galaxy S23 Ultra"
-        model_part = f'"{model_keywords}"'
-    else:
-        # Cth: "13T" (jika brand sudah dipisah)
-        model_part = model_keywords
-        
-    # Template query final
-    query = f'harga {brand} {model_part} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords}'
-    return query
+    # Gabungkan semua bagian menjadi satu query yang kuat
+    # Model selalu diberi tanda kutip, spesifikasi tidak.
+    query = f'harga {brand} "{model}" {spec} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords}'
+    return query.strip() # .strip() untuk menghapus spasi berlebih jika spec kosong
 
 def is_definitely_used(title, snippet):
     """Fungsi validasi ketat untuk memastikan listing adalah barang bekas."""
@@ -69,7 +55,7 @@ def remove_price_outliers(prices):
 
 # --- FUNGSI API & PROSES DATA ---
 
-def search_price_on_google(api_key, search_engine_id, query, pages=2): # Mengurangi halaman untuk pencarian lebih terfokus
+def search_price_on_google(api_key, search_engine_id, query, pages=2):
     """Mencari di beberapa halaman Google."""
     all_items = []
     st.info(f"⚙️ Query yang dikirim ke Google: `{query}`")
@@ -95,14 +81,10 @@ def process_search_results(items):
         link = item.get("link", "")
         title = item.get("title", "")
         snippet = item.get("snippet", "")
-        
-        # --- PERUBAHAN: Gunakan filter is_definitely_used yang lebih ketat ---
         if not is_definitely_used(title, snippet):
             continue
-            
         if link in processed_links:
             continue
-            
         price = extract_price(f"{title} {snippet}")
         if price:
             data_final.append({"judul": title, "harga": price, "link": link})
@@ -113,40 +95,47 @@ def process_search_results(items):
 
 st.set_page_config(page_title="Cek Harga Smartphone Bekas", layout="wide")
 st.title("📱 Aplikasi Pengecek Harga Smartphone Bekas")
-st.write("Fokus pada Smartphone. Masukkan Merek, Model, dan Varian untuk hasil terbaik.")
+st.write("Masukkan detail smartphone untuk mendapatkan estimasi harga pasaran bekas.")
 
+# --- PERUBAHAN UTAMA: 3 Isian Terpisah ---
 with st.form("search_form"):
     API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
     SEARCH_ENGINE_ID = st.secrets.get("GOOGLE_CX", "")
 
-    product_name = st.text_input("Nama Smartphone", "Apple iPhone 14 Pro 256GB")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        brand = st.text_input("Merek Smartphone", "Apple")
+    with col2:
+        model = st.text_input("Model Inti", "iPhone 14 Pro")
+    with col3:
+        spec = st.text_input("Spesifikasi (Opsional)", "256GB")
+    
     submitted = st.form_submit_button("Cek Harga Pasaran!")
 
 if submitted:
     if not API_KEY or not SEARCH_ENGINE_ID:
         st.error("Harap konfigurasikan `GOOGLE_API_KEY` dan `GOOGLE_CX` di Streamlit Secrets!")
-    elif not product_name:
-        st.warning("Nama smartphone tidak boleh kosong.")
+    elif not brand or not model:
+        st.warning("Merek dan Model wajib diisi.")
     else:
-        # --- PERUBAHAN: Gunakan fungsi baru untuk membangun query ---
-        query = build_smartphone_query(product_name)
+        # --- PERUBAHAN UTAMA: Membangun query dari 3 input ---
+        query = build_smartphone_query(brand, model, spec)
+        product_name_display = f"{brand} {model} {spec}".strip()
         
-        with st.spinner(f"Mencari harga untuk '{product_name}'..."):
+        with st.spinner(f"Mencari harga untuk '{product_name_display}'..."):
             raw_items = search_price_on_google(API_KEY, SEARCH_ENGINE_ID, query, pages=3)
             
             if not raw_items:
-                st.warning("Tidak ada hasil yang ditemukan dari Google. Coba kata kunci yang lebih spesifik.")
+                st.warning("Tidak ada hasil yang ditemukan dari Google. Coba periksa kembali input Anda.")
             else:
                 st.write(f"Ditemukan {len(raw_items)} total hasil mentah. Menerapkan filter ketat...")
                 
                 final_data = process_search_results(raw_items)
                 
                 if not final_data:
-                    st.error("Tidak ada data harga yang valid ditemukan setelah difilter. Coba lagi dengan nama produk lain.")
+                    st.error("Tidak ada data harga yang valid ditemukan setelah difilter. Coba lagi dengan kata kunci lain.")
                 else:
                     all_prices = [item['harga'] for item in final_data]
-                    
-                    # --- PERUBAHAN: Bersihkan harga dari outlier sebelum dianalisis ---
                     cleaned_prices = remove_price_outliers(all_prices)
                     
                     if not cleaned_prices:
@@ -155,6 +144,7 @@ if submitted:
                         st.success(f"Berhasil menganalisis **{len(cleaned_prices)}** dari **{len(all_prices)}** listing yang relevan (setelah membersihkan outlier).")
                         
                         st.subheader("📊 Hasil Analisis Harga")
+                        # ... (Sisa kode untuk menampilkan metrik dan dataframe sama seperti sebelumnya) ...
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("Harga Rata-rata", f"Rp {int(statistics.mean(cleaned_prices)):,}")
                         col2.metric("Harga Tengah (Median)", f"Rp {int(statistics.median(cleaned_prices)):,}")
