@@ -4,8 +4,8 @@ import re
 import statistics
 import numpy as np
 
-# --- (Fungsi extract_price, is_valid_product_listing, remove_price_outliers, dll TIDAK BERUBAH) ---
-
+# --- (Fungsi extract_price, is_valid_product_listing, dll TIDAK BERUBAH) ---
+# ... (Salin fungsi-fungsi dari respons sebelumnya di sini) ...
 def extract_price(text):
     pattern = r"(?:Rp\s?\.?)?(\d{1,3}(?:\.\d{3})+(?!\d)|\d{6,})"
     matches = re.findall(pattern, text)
@@ -83,17 +83,29 @@ def process_search_results(items):
             processed_links.add(link)
     return data_final
 
+# --- PERUBAHAN UTAMA ADA DI SINI ---
 
-# --- PERUBAHAN HANYA DI FUNGSI INI ---
+def create_slug(text):
+    """Mengubah teks menjadi format slug URL (lowercase, hyphenated)."""
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9\s-]', '', text) # Hapus karakter non-alfanumerik
+    text = re.sub(r'[\s-]+', '-', text).strip('-') # Ganti spasi dengan hyphen
+    return text
+
 def build_smartphone_query(brand, model, spec):
-    """Membangun query dari 3 input terpisah dengan filter URL."""
+    """Membangun query dengan filter inurl:[model-slug] untuk presisi tinggi."""
     used_keywords = "(bekas|second|seken|2nd|preloved)"
     negative_keywords = "-BNIB -segel -resmi -baru -official"
+    negative_url_patterns = "-inurl:search" # Cukup search saja sekarang
+
+    # Buat slug dari gabungan merek dan model untuk target URL
+    model_slug = create_slug(f"{brand} {model}")
     
-    # Filter tambahan untuk memblokir halaman search & shop
-    negative_url_patterns = "-inurl:search -inurl:shop"
+    # Kata kunci pencarian utama tetap fleksibel
+    search_keywords = f'{brand} "{model}" {spec}'
     
-    query = f'harga {brand} "{model}" {spec} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords} {negative_url_patterns}'
+    # Gabungkan semua bagian
+    query = f'{search_keywords} inurl:{model_slug} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords} {negative_url_patterns}'
     return query.strip()
 
 # --- UI STREAMLIT (Tidak ada perubahan) ---
@@ -113,8 +125,8 @@ with st.form("search_form"):
         spec = st.text_input("Spesifikasi (Opsional)", "256GB")
     submitted = st.form_submit_button("Cek Harga Pasaran!")
 
+# ... (Sisa kode setelah `if submitted` sama persis, karena perubahan hanya di build_smartphone_query) ...
 if submitted:
-    # ... (Seluruh logika setelah form submit sama persis) ...
     if not API_KEY or not SEARCH_ENGINE_ID:
         st.error("Harap konfigurasikan `GOOGLE_API_KEY` dan `GOOGLE_CX` di Streamlit Secrets!")
     elif not brand or not model:
@@ -125,7 +137,7 @@ if submitted:
         with st.spinner(f"Mencari harga untuk '{product_name_display}'..."):
             raw_items = search_price_on_google(API_KEY, SEARCH_ENGINE_ID, query, pages=3)
             if not raw_items:
-                st.warning("Tidak ada hasil yang ditemukan dari Google. Coba periksa kembali input Anda.")
+                st.warning("Tidak ada hasil yang ditemukan. Coba periksa kembali input atau coba tanpa spesifikasi.")
             else:
                 st.write(f"Ditemukan {len(raw_items)} total hasil mentah. Menerapkan filter super ketat...")
                 final_data = process_search_results(raw_items)
