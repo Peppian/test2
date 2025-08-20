@@ -4,10 +4,9 @@ import re
 import statistics
 import numpy as np
 
-# --- FUNGSI-FUNGSI UTAMA ---
+# --- (Fungsi extract_price, is_valid_product_listing, remove_price_outliers, dll TIDAK BERUBAH) ---
 
 def extract_price(text):
-    # ... (Fungsi ini tidak berubah) ...
     pattern = r"(?:Rp\s?\.?)?(\d{1,3}(?:\.\d{3})+(?!\d)|\d{6,})"
     matches = re.findall(pattern, text)
     if not matches: return None
@@ -19,16 +18,8 @@ def extract_price(text):
                 return price
     return None
 
-# --- PERUBAHAN UTAMA: FUNGSI VALIDASI "GATEKEEPER" ---
-
 def is_valid_product_listing(title, snippet):
-    """
-    Fungsi 'Gatekeeper' yang menggabungkan semua logika validasi.
-    Mengembalikan True hanya jika ini adalah listing produk bekas yang valid.
-    """
     text = f"{title} {snippet}".lower()
-
-    # 1. Filter Aksesoris & Spare Part (Daftar Kata Kunci Terlarang)
     accessory_blacklist = [
         'case', 'casing', 'cover', 'tempered glass', 'hydrogel', 'spy', 'privacy',
         'kaca', 'baterai', 'batre', 'charger', 'kabel', 'part', 'sparepart',
@@ -37,35 +28,18 @@ def is_valid_product_listing(title, snippet):
     ]
     if any(word in text for word in accessory_blacklist):
         return False
-
-    # 2. Filter Halaman Toko Umum
     shop_page_blacklist = ['toko', 'online', 'produk lengkap', 'harga terbaik']
     if any(phrase in text for phrase in shop_page_blacklist) and "jual" not in text:
         return False
-        
-    # 3. Filter Kondisi Bekas (Logika yang sudah ada)
     positive_signals = ['bekas', 'second', 'seken', '2nd', 'preloved']
     if not any(word in text for word in positive_signals):
         return False
-    
     strong_negative_signals = ['bnib', 'segel', 'brand new', 'garansi resmi', 'official store', 'baru']
     if any(word in text for word in strong_negative_signals):
         return False
-        
-    # Jika lolos semua filter, maka ini adalah listing yang valid
     return True
 
-# ... (Fungsi build_smartphone_query dan remove_price_outliers tidak berubah) ...
-
-def build_smartphone_query(brand, model, spec):
-    """Membangun query dari 3 input terpisah untuk akurasi maksimal."""
-    used_keywords = "(bekas|second|seken|2nd|preloved)"
-    negative_keywords = "-BNIB -segel -resmi -baru -official"
-    query = f'harga {brand} "{model}" {spec} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords}'
-    return query.strip()
-
 def remove_price_outliers(prices):
-    """Membersihkan daftar harga dari nilai ekstrem (outlier) menggunakan IQR."""
     if len(prices) < 4:
         return prices
     q1 = np.percentile(prices, 25)
@@ -75,11 +49,7 @@ def remove_price_outliers(prices):
     upper_bound = q3 + 1.5 * iqr
     return [price for price in prices if lower_bound <= price <= upper_bound]
 
-
-# --- FUNGSI API & PROSES DATA ---
-
 def search_price_on_google(api_key, search_engine_id, query, pages=2):
-    # ... (Fungsi ini tidak berubah) ...
     all_items = []
     st.info(f"⚙️ Query yang dikirim ke Google: `{query}`")
     for page in range(pages):
@@ -97,28 +67,36 @@ def search_price_on_google(api_key, search_engine_id, query, pages=2):
     return all_items
 
 def process_search_results(items):
-    """Memproses hasil pencarian mentah menjadi data harga yang bersih."""
     data_final = []
     processed_links = set()
     for item in items:
         title = item.get("title", "")
         snippet = item.get("snippet", "")
-        
-        # --- PERUBAHAN UTAMA: Gunakan fungsi 'Gatekeeper' yang baru ---
         if not is_valid_product_listing(title, snippet):
             continue
-            
         link = item.get("link", "")
         if link in processed_links:
             continue
-            
         price = extract_price(f"{title} {snippet}")
         if price:
             data_final.append({"judul": title, "harga": price, "link": link})
             processed_links.add(link)
     return data_final
 
-# --- UI STREAMLIT (Tidak ada perubahan signifikan di sini) ---
+
+# --- PERUBAHAN HANYA DI FUNGSI INI ---
+def build_smartphone_query(brand, model, spec):
+    """Membangun query dari 3 input terpisah dengan filter URL."""
+    used_keywords = "(bekas|second|seken|2nd|preloved)"
+    negative_keywords = "-BNIB -segel -resmi -baru -official"
+    
+    # Filter tambahan untuk memblokir halaman search & shop
+    negative_url_patterns = "-inurl:search -inurl:shop"
+    
+    query = f'harga {brand} "{model}" {spec} {used_keywords} (site:tokopedia.com OR site:shopee.co.id) {negative_keywords} {negative_url_patterns}'
+    return query.strip()
+
+# --- UI STREAMLIT (Tidak ada perubahan) ---
 st.set_page_config(page_title="Cek Harga Smartphone Bekas", layout="wide")
 st.title("📱 Aplikasi Pengecek Harga Smartphone Bekas")
 st.write("Masukkan detail smartphone untuk mendapatkan estimasi harga pasaran bekas.")
@@ -136,7 +114,7 @@ with st.form("search_form"):
     submitted = st.form_submit_button("Cek Harga Pasaran!")
 
 if submitted:
-    # ... (Seluruh logika setelah form submit tidak berubah) ...
+    # ... (Seluruh logika setelah form submit sama persis) ...
     if not API_KEY or not SEARCH_ENGINE_ID:
         st.error("Harap konfigurasikan `GOOGLE_API_KEY` dan `GOOGLE_CX` di Streamlit Secrets!")
     elif not brand or not model:
@@ -144,7 +122,6 @@ if submitted:
     else:
         query = build_smartphone_query(brand, model, spec)
         product_name_display = f"{brand} {model} {spec}".strip()
-        
         with st.spinner(f"Mencari harga untuk '{product_name_display}'..."):
             raw_items = search_price_on_google(API_KEY, SEARCH_ENGINE_ID, query, pages=3)
             if not raw_items:
